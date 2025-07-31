@@ -52,8 +52,15 @@ async def process_chat_message(state: dict, user_input: str, db: AsyncSession) -
         menus_by_restaurant = await db_service.get_normalized_menus_for_restaurants(db, restaurants_step1)
         all_menus = {menu for menus in menus_by_restaurant.values() for menu in menus}
 
-        # 3단계: 건강/식단 제약으로 메뉴 필터링 (I/O Bound - 비동기)
-        suitable_menus = await filter_service.filter_menus_by_health(all_menus, user_info.disease, user_info.dietary_restrictions)
+        # 3단계: 하이브리드 건강/식단 제약 필터링 (사전 판단 + LLM 정밀 검증)
+        suitable_menus = await filter_service.filter_menus_with_hybrid_approach(
+            db=db,
+            session_id=session_id,
+            standard_dishes=all_menus,
+            disease=user_info.disease,
+            dietary_restrictions=user_info.dietary_restrictions
+        )
+        
         if not suitable_menus:
              return ChatResponse(response="고객님의 건강 조건에 맞는 메뉴를 찾지 못했습니다.", session_id=session_id, is_final=True)
         
@@ -149,9 +156,6 @@ async def start_new_chat_session(user_id: str, db: AsyncSession) -> StartChatRes
     return StartChatResponse(state=state, bot_response=initial_bot_response)
 
 
-
-
-
 async def get_chat_history(session_id: str, db: AsyncSession) -> ChatResponse:
     if session_id not in SESSION_STATE:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -203,5 +207,3 @@ async def get_user_history(user_id: str, db: AsyncSession) -> List[HistorySummar
                     created_at=datetime.now() # 실제로는 세션 생성 시간을 사용해야 합니다.
                 ))
     return history_list
-
-

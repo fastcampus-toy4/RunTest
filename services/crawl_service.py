@@ -16,6 +16,33 @@ def get_llm():
     return app.state.llm
 
 
+async def get_restaurants_realtime_info(final_candidates: List[Dict]) -> List[Dict]:
+    """
+    최종 후보 레스토랑 목록을 크롤링하여 실시간 정보를 확인합니다.
+    """
+    crawled_results = []
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        tasks = [_get_restaurant_info_task(browser, f"{r['name']} {r.get('branch_name', '')}".strip()) for r in final_candidates]
+        crawled_results = await asyncio.gather(*tasks)
+        await browser.close()
+
+    # 크롤링 성공한 결과만 반환
+    successful_crawls = []
+    for data in crawled_results:
+        if data.get('crawling_success'):
+            successful_crawls.append(data)
+                    
+    return successful_crawls
+
+
+async def check_visitable(crawled_data: Dict, user_time: str) -> bool:
+    """
+    크롤링된 영업시간 정보와 사용자 시간을 비교해 방문 가능 여부를 판단합니다.
+    """
+    return await _is_restaurant_open_llm_async(crawled_data, user_time)
+
+
 async def get_final_recommendations_with_crawling(final_candidates: List[Dict], user_time: str) -> List[Dict]:
     """
     최종 후보 레스토랑 목록을 크롤링하여 실시간 정보를 확인하고,

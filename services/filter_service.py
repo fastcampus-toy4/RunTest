@@ -12,6 +12,7 @@ from langchain_google_community import GoogleSearchAPIWrapper
 from langchain.chains import LLMChain
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from collections import defaultdict
 from . import data_loader  # 사전 로드된 DB 및 데이터 사용
 from core.config import settings
 
@@ -30,6 +31,98 @@ DISEASE_KEYWORD_MAP = {
     "골격계 질환": ["골격계", "뼈", "골다공증", "골연화증", "구루병"], "알레르기": ["알레르기", "두드러기", "천식"],
     "급성 감염성 질환": ["감염", "감기", "폐렴", "코로나", "장염", "기관지염", "수두", "설사"],
 }
+
+async def filter_menus_with_hybrid_approach(
+    db: AsyncSession,
+    session_id: str, 
+    standard_dishes: Set[str], 
+    disease: str, 
+    dietary_restrictions: Optional[str]
+) -> Set[str]:
+    """
+    2단계 하이브리드 필터링: 사전 판단 데이터 기반 빠른 필터링 + LLM 기반 정밀 검증
+    """
+    print(f"\n--- 하이브리드 필터링 시작 (총 {len(standard_dishes)}개 메뉴 대상) ---")
+    print(f"질병: {disease}, 식단 제약: {dietary_restrictions}")
+    
+    if not disease or disease.strip().lower() in ['없음', '없어요']:
+        print("-> 질병 정보 없음. 모든 메뉴를 적합으로 간주합니다.")
+        return standard_dishes
+
+    # === 1단계: 사전 판단 데이터 기반 빠른 필터링 ===
+    print("\n--- 1단계: 사전 판단 데이터 기반 빠른 필터링 시작 ---")
+    pre_approved_dishes = await _filter_with_precomputed_data(standard_dishes, disease)
+    
+    if not pre_approved_dishes:
+        print("-> 1단계 필터링 결과, 적합한 메뉴 후보가 없습니다.")
+        return set()
+    
+    print(f"-> 1단계 필터링 완료. {len(pre_approved_dishes)}개 메뉴가 2단계 정밀 검증 대상으로 선정.")
+    
+    # === 2단계: LLM 기반 정밀 검증 ===
+    print("\n--- 2단계: LLM 기반 정밀 검증 시작 ---")
+    final_suitable_dishes = await filter_menus_by_health_rag_with_self_correction(
+        db=db,
+        session_id=session_id,
+        standard_dishes=pre_approved_dishes,
+        disease=disease,
+        dietary_restrictions=dietary_restrictions
+    )
+    
+    return final_suitable_dishes
+
+async def _filter_with_precomputed_data(standard_dishes: Set[str], disease: str) -> Set[str]:
+    """
+    사전 계산된 클러스터 및 건강 판단 데이터를 사용한 빠른 필터링
+    """
+    print("-> 사전 계산된 데이터로 빠르게 조회 중...")
+    
+    pre_approved_dishes = set()
+    
+    def sync_filter():
+        dishes_to_add = set()
+        for dish in standard_dishes:
+            try:
+                # 1. 음식명 -> 클러스터 ID 매핑
+                cluster_id = data_loader.FOOD_TO_CLUSTER_MAP.get(dish)
+                if cluster_id is None:
+                    # 클러스터 매핑이 없는 경우, 안전하게 통과시켜서 2단계에서 판단
+                    dishes_to_add.add(dish)
+                    continue
+                
+                # 2. 클러스터 ID -> 대표 음식 매핑
+                representative_food = data_loader.CLUSTER_TO_FOOD_MAP.get(cluster_id)
+                if representative_food is None:
+                    dishes_to_add.add(dish)
+                    continue
+                
+                # 3. 사전 계산된 건강 판단 결과 조회
+                results = data_loader.HEALTH_JUDGMENT_DB.get(
+                    where={
+                        "$and": [
+                            {"disease": {"$eq": disease}}, 
+                            {"food_name": {"$eq": representative_food}}
+                        ]
+                    },
+                    limit=1
+                )
+                
+                # 4. 적합 판정을 받은 음식만 통과
+                if results and results['metadatas'] and results['metadatas'][0].get("is_suitable"):
+                    dishes_to_add.add(dish)
+                    
+            except Exception as e:
+                print(f"[1단계 필터링 오류] '{dish}' 조회 중 오류 발생: {e}")
+                # 오류 발생 시 안전하게 통과시켜서 2단계에서 판단
+                dishes_to_add.add(dish)
+        
+        return dishes_to_add
+    
+    # ChromaDB 조회는 동기 함수이므로 to_thread로 감싸서 비동기 컨텍스트에서 실행
+    pre_approved_dishes = await asyncio.to_thread(sync_filter)
+    
+    print(f"-> 사전 판단 데이터 조회 완료: {len(pre_approved_dishes)}개 메뉴 통과")
+    return pre_approved_dishes
 
 async def filter_menus_by_health_rag_with_self_correction(
     db: AsyncSession,
@@ -431,7 +524,7 @@ async def search_suitable_foods_with_dynamic_criteria(db: AsyncSession, criteria
         # 동적 쿼리 생성
         query_str = f"""
         SELECT name, {', '.join([key.replace('max_', '').replace('min_', '') for key in criteria.keys()])}
-        FROM food_nutrition 
+        FROM food_nutritional_ingredients 
         WHERE {' AND '.join(where_conditions)}
         LIMIT 100
         """
@@ -490,16 +583,16 @@ async def get_available_nutrition_columns() -> dict:
     }
 
 
-# 기존 함수들은 새로운 함수를 호출하도록 수정
+# === 기존 함수들을 새로운 하이브리드 접근법으로 업데이트 ===
 async def filter_menus_by_health(standard_dishes: Set[str], disease: str, dietary_restrictions: str) -> Set[str]:
-    """RAG와 LLM을 사용하여 건강/식단 제약 기반으로 메뉴를 필터링 (강화된 버전 사용)"""
+    """RAG와 LLM을 사용하여 건강/식단 제약 기반으로 메뉴를 필터링 (하이브리드 접근법 사용)"""
     # 세션 ID는 임시로 생성 (실제로는 상위에서 전달받아야 함)
     import uuid
     session_id = str(uuid.uuid4())
     
     # DB 세션은 임시로 None 전달 (실제로는 상위에서 전달받아야 함) 
     # 이 부분은 chat_orchestrator에서 DB 세션을 전달하도록 수정 필요
-    return await filter_menus_by_health_rag_with_self_correction(
+    return await filter_menus_with_hybrid_approach(
         db=None,  # 이 부분은 수정 필요
         session_id=session_id,
         standard_dishes=standard_dishes,
@@ -508,31 +601,67 @@ async def filter_menus_by_health(standard_dishes: Set[str], disease: str, dietar
     )
 
 async def filter_restaurants_by_review(restaurants: List[Dict], other_requests: str) -> List[Dict]:
-    """리뷰 기반으로 음식점 목록을 필터링하고 재정렬"""
-    if not other_requests or other_requests.lower() in ['없음', '없어요']:
+    """
+    [RAG 구현됨] 사용자 요청과 유사한 리뷰를 기반으로 레스토랑 목록을 필터링하고 재정렬합니다.
+    """
+    print("\n--- 5단계: 리뷰 기반 유사도(RAG) 필터링 시작 ---")
+    if not other_requests or other_requests.strip().lower() in ['없음', '없어요']:
+        print("-> 추가 요청사항 없음. 리뷰 필터링을 건너뜁니다.")
         return restaurants
 
-    # ChromaDB 검색은 동기 함수이므로 to_thread로 감싸 비동기 컨텍스트에서 안전하게 실행
-    def search_reviews():
-        return data_loader.REVIEW_DB.similarity_search_with_score(other_requests, k=30)
-    
-    retrieved_reviews = await asyncio.to_thread(search_reviews)
+    print(f"-> 요청사항 '{other_requests}'(으)로 리뷰 기반 필터링을 진행합니다...")
 
-    if not retrieved_reviews:
-        return restaurants
+    try:
+        # 사용자 요청과 유사한 리뷰 검색 (상위 30개)
+        # similarity_search_with_score는 (Document, score) 튜플의 리스트를 반환합니다.
+        # score는 거리를 의미하며, 점수가 낮을수록 유사합니다.
+        def search_reviews():
+            return data_loader.REVIEW_DB.similarity_search_with_score(other_requests, k=30)
+        
+        retrieved_reviews = await asyncio.to_thread(search_reviews)
 
-    # 점수 계산 (이 부분은 CPU bound이므로 그냥 둬도 무방)
-    scores = {f"{r['name']} {r.get('branch_name', '')}".strip(): 0.0 for r in restaurants}
-    for doc, score in retrieved_reviews:
-        name = doc.metadata.get("restaurant_full_name")
-        if name in scores:
-            scores[name] += score  # score가 거리(distance)이므로 낮을수록 좋음
+        if not retrieved_reviews:
+            print("-> 요청사항과 유사한 리뷰를 찾지 못했습니다. 기존 후보군을 그대로 반환합니다.")
+            return restaurants
 
-    # 점수가 낮은 순(유사도가 높은 순)으로 정렬
-    ranked_names = sorted(scores.keys(), key=lambda name: scores[name])
-    
-    # 정렬된 이름 순서대로 최종 음식점 목록 생성
-    restaurants_dict = {f"{r['name']} {r.get('branch_name', '')}".strip(): r for r in restaurants}
-    final_list = [restaurants_dict[name] for name in ranked_names if name in restaurants_dict]
+        # 리뷰 점수를 레스토랑별로 집계
+        restaurant_scores = defaultdict(float)
+        restaurant_counts = defaultdict(int)
 
-    return final_list
+        # 현재 추천 후보군에 오른 레스토랑 이름 목록을 Set으로 만들어 빠른 조회를 위함
+        candidate_restaurant_names = {f"{r['name']} {r.get('branch_name', '')}".strip() for r in restaurants}
+
+        for doc, score in retrieved_reviews:
+            # ChromaDB에 저장된 리뷰 메타데이터에서 식당 풀네임 추출
+            restaurant_full_name = doc.metadata.get("restaurant_full_name")
+
+            # 현재 추천 후보군에 있는 레스토랑의 리뷰만 점수 집계
+            if restaurant_full_name and restaurant_full_name in candidate_restaurant_names:
+                restaurant_scores[restaurant_full_name] += score # 점수가 낮을수록 좋으므로 그대로 더함
+                restaurant_counts[restaurant_full_name] += 1
+        
+        if not restaurant_scores:
+            print("-> 후보군에 오른 레스토랑과 관련된 리뷰를 찾지 못했습니다.")
+            return restaurants
+
+        # 리뷰가 여러 개 나온 곳에 가중치를 부여하여 평균 점수 계산 (평균 점수가 낮을수록 순위가 높음)
+        ranked_restaurant_names = sorted(
+            restaurant_scores.keys(),
+            key=lambda name: restaurant_scores[name] / restaurant_counts[name]
+        )
+        
+        # 최종 레스토랑 목록을 순위에 맞게 재정렬
+        restaurants_dict = {f"{r['name']} {r.get('branch_name', '')}".strip(): r for r in restaurants}
+        
+        final_restaurants = []
+        for name in ranked_restaurant_names:
+            if name in restaurants_dict:
+                final_restaurants.append(restaurants_dict[name])
+
+        print(f"-> 리뷰 필터링 완료. {len(final_restaurants)}개의 음식점 순서를 재정렬했습니다.")
+        return final_restaurants[:10] # 상위 10개만 반환
+
+    except Exception as e:
+        print(f"[리뷰 필터링 오류] 리뷰 DB 조회 또는 처리 중 오류 발생: {e}")
+        # 오류 발생 시, 필터링을 건너뛰고 원래 후보군을 반환
+        return restaurants[:10]

@@ -19,15 +19,23 @@ try:
     # 2. 임베딩 함수 및 벡터 DB 준비
     embedding_function = OpenAIEmbeddings(model="text-embedding-3-small", api_key=settings.OPENAI_API_KEY)
     
+    # 건강 판단 DB
     HEALTH_JUDGMENT_DB = Chroma(
         persist_directory=settings.HEALTH_JUDGMENT_DB_PATH,
         embedding_function=embedding_function
     )
+    
+    # 리뷰 DB (RAG 필터링용)
     REVIEW_DB = Chroma(
         persist_directory=settings.REVIEW_DB_PATH,
         embedding_function=embedding_function
     )
+    
     print("✅ 데이터 로딩 완료.")
+    print(f"   - 클러스터 매핑: {len(FOOD_TO_CLUSTER_MAP)}개 음식")
+    print(f"   - 대표 음식 매핑: {len(CLUSTER_TO_FOOD_MAP)}개 클러스터")
+    print("   - 건강 판단 DB: 로드 완료")
+    print("   - 리뷰 DB: 로드 완료")
 
 except FileNotFoundError as e:
     print(f"[치명적 오류] 사전 계산 데이터 파일을 찾을 수 없습니다: {e}", file=sys.stderr)
