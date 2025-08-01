@@ -209,7 +209,7 @@ async def _extract_sql_conditions_from_guidelines(guideline_text: str) -> Dict[s
     llm = ChatOpenAI(model="gpt-4o", temperature=0, api_key=settings.OPENAI_API_KEY, model_kwargs={"response_format": {"type": "json_object"}})
     
     prompt = f"""
-    당신은 영양학 가이드라인을 분석하여 MySQL의 `food_nutrition` 테이블을 쿼리할 수 있는 JSON 조건으로 변환하는 전문가입니다.
+    당신은 영양학 가이드라인을 분석하여 MySQL의 `food_nutritional_ingredients` 테이블을 쿼리할 수 있는 JSON 조건으로 변환하는 전문가입니다.
 
     [테이블 컬럼 정보]
     - `energy_kcal`: 에너지 (kcal)
@@ -236,8 +236,8 @@ async def _extract_sql_conditions_from_guidelines(guideline_text: str) -> Dict[s
         return {}
 
 async def _filter_menus_by_nutrition_in_sql(conditions: Dict[str, Any], db: AsyncSession) -> Set[str]:
-    """추출된 조건으로 MySQL의 food_nutrition 테이블을 조회하여 적합한 음식 목록을 반환합니다."""
-    print(f"-> MySQL `food_nutrition` 테이블 조회 시작 (조건: {conditions})")
+    """추출된 조건으로 MySQL의 food_nutritional_ingredients 테이블을 조회하여 적합한 음식 목록을 반환합니다."""
+    print(f"-> MySQL `food_nutritional_ingredients` 테이블 조회 시작 (조건: {conditions})")
     where_clauses = []
     params = {}
     
@@ -254,7 +254,7 @@ async def _filter_menus_by_nutrition_in_sql(conditions: Dict[str, Any], db: Asyn
     if not where_clauses:
         return set()
 
-    query_str = f"SELECT DISTINCT `food_name` FROM `food_nutrition` WHERE {' AND '.join(where_clauses)}"
+    query_str = f"SELECT DISTINCT `food_name` FROM `food_nutritional_ingredients` WHERE {' AND '.join(where_clauses)}"
     query = text(query_str)
     
     result = await db.execute(query, params)
