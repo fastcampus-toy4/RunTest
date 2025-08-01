@@ -21,12 +21,21 @@ try:
     
     # 건강 판단 DB
     HEALTH_JUDGMENT_DB = Chroma(
+        collection_name="disease_and_diet",
         persist_directory=settings.HEALTH_JUDGMENT_DB_PATH,
+        embedding_function=embedding_function
+    )
+    
+    # 영양 정보 DB
+    DISEASE_DB = Chroma(
+        collection_name="disease_papers",
+        persist_directory=settings.DISEASE_DB_PATH,
         embedding_function=embedding_function
     )
     
     # 리뷰 DB (RAG 필터링용)
     REVIEW_DB = Chroma(
+        collection_name="langchain",
         persist_directory=settings.REVIEW_DB_PATH,
         embedding_function=embedding_function
     )

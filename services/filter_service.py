@@ -188,9 +188,7 @@ async def _get_nutritional_guidelines_from_db(disease: str) -> str:
     print(f"-> ChromaDB에서 '{disease}' 영양 가이드라인 검색...")
     try:
         def search_db():
-            # 'chroma_db_food'를 가정. 실제로는 data_loader에 정의된 VectorDB를 사용해야 합니다.
-            # 여기서는 HEALTH_JUDGMENT_DB를 예시로 사용합니다.
-            docs = data_loader.HEALTH_JUDGMENT_DB.similarity_search(
+            docs = data_loader.DISEASE_DB.similarity_search(
                 f"{disease} 환자의 식단 영양성분 기준", k=1
             )
             return docs[0].page_content if docs else ""
@@ -337,7 +335,7 @@ async def _retrieve_health_knowledge(disease: str, dietary_restrictions: str) ->
         def search_local_db():
             try:
                 query = f"{disease} 환자에게 추천하는 {dietary_restrictions or ''} 식단"
-                docs = data_loader.HEALTH_JUDGMENT_DB.similarity_search(query, k=3)
+                docs = data_loader.DISEASE_DB.similarity_search(query, k=3)
                 return "\n\n".join([doc.page_content for doc in docs]) if docs else ""
             except Exception as e:
                 print(f"   - ChromaDB 검색 중 오류: {e}")

@@ -31,7 +31,7 @@ class Settings:
     FOOD_CLUSTERS_PATH: str = os.getenv("FOOD_CLUSTERS_PATH")
     REPRESENTATIVE_FOODS_PATH: str = os.getenv("REPRESENTATIVE_FOODS_PATH")
     HEALTH_JUDGMENT_DB_PATH: str = os.getenv("HEALTH_JUDGMENT_DB_PATH")
+    DISEASE_DB_PATH: str = os.getenv("DISEASE_DB_PATH")
     REVIEW_DB_PATH: str = os.getenv("REVIEW_DB_PATH")
-
 
 settings = Settings()

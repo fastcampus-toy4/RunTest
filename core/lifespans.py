@@ -45,6 +45,10 @@ async def lifespan(app: FastAPI):
             persist_directory=settings.CHROMA_DB_HEALTH_JUDGMENTS_PATH,
             embedding_function=app.state.embedding_function
         )
+        app.state.disease_db = Chroma(
+            persist_directory=settings.CHROMA_DB_DISEASE_PATH,
+            embedding_function=app.state.embedding_function
+        )
         app.state.review_db = Chroma(
             persist_directory=settings.CHROMA_DB_REVIEW_PATH,
             embedding_function=app.state.embedding_function

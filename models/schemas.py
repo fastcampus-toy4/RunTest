@@ -71,4 +71,3 @@ class FullVisitabilityAnalysis(BaseModel):
     operating_hours: Optional[str] = Field(None, description="영업시간")
     holiday_info: Optional[str] = Field(None, description="휴무일")
     final_conclusion: VisitabilityConclusion
-
